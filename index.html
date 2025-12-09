@@ -1,54 +1,370 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>动态爱心</title>
+    <title>逼真心跳爱心粒子特效</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .canvas-container {
+                @apply fixed top-0 left-0 w-full h-full overflow-hidden bg-black/95;
+            }
+            .heart-text {
+                @apply absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white/90 text-xl md:text-2xl font-light z-10 transition-all duration-1500;
+                text-shadow: 0 0 10px rgba(255, 46, 99, 0.8), 0 0 20px rgba(255, 101, 152, 0.5);
+            }
+        }
+    </style>
     <style>
-        body {
+        * {
             margin: 0;
             padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            box-sizing: border-box;
+        }
+        
+        body {
             height: 100vh;
-            background-color: #000;
+            overflow: hidden;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: #000;
+            transition: opacity 1s ease;
         }
-        .heart {
-            width: 100px;
-            height: 90px;
-            background: red;
-            position: relative;
-            transform: rotate(-45deg);
-            animation: beat 1s infinite;
+        
+        canvas {
+            display: block;
+            cursor: pointer;
         }
-        .heart::before,
-        .heart::after {
-            content: '';
-            width: 100px;
-            height: 100px;
-            background: red;
+        
+        :root {
+            --heart-color-1: #ff2e63; /* 深粉 */
+            --heart-color-2: #ff6598; /* 中粉 */
+            --heart-color-3: #ffa0c0; /* 浅粉 */
+            --heart-glow: rgba(255, 46, 99, 0.6); /* 爱心光晕色 */
+        }
+
+        /* 新增：点击粒子爆发的样式优化 */
+        .particle-burst {
             position: absolute;
-            top: 0;
+            pointer-events: none;
             border-radius: 50%;
-        }
-        .heart::before {
-            left: 50px;
-        }
-        .heart::after {
-            left: 0;
-        }
-        @keyframes beat {
-            0%, 100% {
-                transform: scale(1);
-            }
-            50% {
-                transform: scale(1.2);
-            }
+            background: radial-gradient(circle, var(--heart-color-2) 0%, transparent 70%);
+            opacity: 0;
+            transform: scale(0);
+            transition: opacity 0.6s ease, transform 0.6s ease;
         }
     </style>
 </head>
 <body>
-    <div class="heart"></div>
+    <div class="canvas-container">
+        <canvas id="heartCanvas"></canvas>
+        <div class="heart-text" id="heartText">爱是永恒的旋律 ❤️</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('heartCanvas');
+        const ctx = canvas.getContext('2d');
+        const heartText = document.getElementById('heartText');
+        let mouseX = null, mouseY = null;
+        let lastClickTime = 0; // 防止高频点击
+        
+        // 修复心跳参数：确保爱心始终可见，同时保留律动效果
+        let heartBeatPhase = 0;    
+        let heartScale = 1;        
+        const beatIntensity = 0.12; // 降低强度，避免缩放过度
+        const beatSpeed = 0.015;    // 微调速度，保证可见性
+        const beatEaseFactor = 1.1; // 降低缓动因子，避免异常缩放
+
+        // 适配窗口
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // 获取CSS变量
+        function getCssVar(varName) {
+            return getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+        }
+
+        // 十六进制转RGB
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 255, g: 0, b: 0 };
+        }
+
+        // 优化粒子类：增加生命周期、大小随心跳变化、更自然的运动轨迹
+        class Particle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.baseX = x;
+                this.baseY = y;
+                this.size = Math.random() * 5 + 1; // 粒子尺寸略增大，视觉更饱满
+                this.baseSize = this.size; // 基础尺寸，用于心跳缩放
+                this.speedX = Math.random() * 1.2 - 0.6;
+                this.speedY = Math.random() * 1.2 - 0.6;
+                this.alpha = Math.random() * 0.8 + 0.2;
+                this.angle = Math.random() * Math.PI * 2;
+                this.distance = Math.random() * 35 + 10; // 粒子运动半径增大
+                this.rotateSpeed = Math.random() * 0.05 - 0.025;
+                this.life = Math.random() * 150 + 100; // 粒子生命周期（帧）
+                this.maxLife = this.life; // 最大生命周期，用于透明度衰减
+
+                // 优化粒子颜色渐变：更细腻的过渡
+                const color1 = hexToRgb(getCssVar('--heart-color-1'));
+                const color2 = hexToRgb(getCssVar('--heart-color-2'));
+                const color3 = hexToRgb(getCssVar('--heart-color-3'));
+                const ratio1 = Math.random();
+                const ratio2 = Math.random();
+                this.r = Math.floor(color1.r * (1 - ratio1) + color2.r * ratio1 * ratio2 + color3.r * (1 - ratio2));
+                this.g = Math.floor(color1.g * (1 - ratio1) + color2.g * ratio1 * ratio2 + color3.g * (1 - ratio2));
+                this.b = Math.floor(color1.b * (1 - ratio1) + color2.b * ratio1 * ratio2 + color3.b * (1 - ratio2));
+            }
+
+            update() {
+                // 粒子生命周期衰减
+                this.life--;
+                if (this.life <= 0) {
+                    // 生命周期结束后重置粒子
+                    this.life = Math.random() * 150 + 100;
+                    this.x = this.baseX;
+                    this.y = this.baseY;
+                    this.alpha = Math.random() * 0.8 + 0.2;
+                }
+
+                // 优化心跳缩放：粒子大小随心跳同步变化，更有层次感
+                const beatFactor = 1 + (heartScale - 1) * 0.9;
+                this.size = this.baseSize * beatFactor;
+                
+                // 粒子运动轨迹优化：更贴合爱心轮廓，加入缓动
+                this.angle += this.rotateSpeed + (Math.sin(Date.now() * 0.001) * 0.006);
+                const easedDistance = this.distance * beatFactor * (0.9 + Math.sin(this.angle) * 0.1);
+                this.x = this.baseX + Math.cos(this.angle) * easedDistance;
+                this.y = this.baseY + Math.sin(this.angle) * easedDistance;
+
+                // 优化位移：加入重力衰减，运动更自然
+                this.speedX *= 0.995;
+                this.speedY *= 0.995;
+                this.x += this.speedX + (Math.sin(Date.now() * 0.0006 + heartBeatPhase) * 0.35);
+                this.y += this.speedY + (Math.cos(Date.now() * 0.0006 + heartBeatPhase) * 0.35);
+
+                // 边界回弹优化：更柔和的回弹效果
+                if (this.x < 0) {
+                    this.x = 0;
+                    this.speedX *= -1.1;
+                } else if (this.x > canvas.width) {
+                    this.x = canvas.width;
+                    this.speedX *= -1.1;
+                }
+                if (this.y < 0) {
+                    this.y = 0;
+                    this.speedY *= -1.1;
+                } else if (this.y > canvas.height) {
+                    this.y = canvas.height;
+                    this.speedY *= -1.1;
+                }
+
+                // 透明度优化：结合生命周期+心跳，更自然的呼吸效果
+                const lifeAlpha = this.life / this.maxLife;
+                const beatAlpha = Math.sin(Date.now() * 0.002 + this.x * 0.01 + heartBeatPhase) * 0.015;
+                this.alpha += beatAlpha;
+                this.alpha = Math.max(0.1, Math.min(0.95, this.alpha * lifeAlpha));
+
+                // 鼠标交互优化：距离衰减更自然，交互范围更合理
+                if (mouseX && mouseY) {
+                    const dx = mouseX - this.x;
+                    const dy = mouseY - this.y;
+                    const distance = Math.hypot(dx, dy);
+                    if (distance < 350) {
+                        const pullForce = 1 - (distance / 350); // 距离越近，拉力越大
+                        this.x += dx * 0.004 * pullForce;
+                        this.y += dy * 0.004 * pullForce;
+                    }
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                // 粒子形状优化：轻微椭圆，更贴近水滴感
+                ctx.beginPath();
+                ctx.ellipse(this.x, this.y, this.size, this.size * 0.85, 0, 0, Math.PI * 2);
+                ctx.fillStyle = `rgb(${this.r}, ${this.g}, ${this.b})`;
+                ctx.fill();
+                // 优化光晕：心跳时光晕更明显，且光晕大小随粒子尺寸变化
+                ctx.shadowBlur = 12 + (heartScale - 1) * 6 + (this.size - this.baseSize) * 2;
+                ctx.shadowColor = `rgba(${this.r}, ${this.g}, ${this.b}, 0.7)`;
+                ctx.restore();
+            }
+        }
+
+        // 生成爱心坐标点（无修改，基础功能）
+        function createHeartPoints() {
+            const points = [];
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const scale = Math.min(canvas.width, canvas.height) / 8;
+
+            for (let t = 0; t < Math.PI * 2; t += 0.01) {
+                const x = 16 * Math.pow(Math.sin(t), 3);
+                const y = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+                points.push({
+                    x: centerX + x * scale,
+                    y: centerY + y * scale
+                });
+            }
+            return points;
+        }
+
+        // 修复心跳爱心绘制：确保爱心始终可见，优化透明度和缩放
+        function drawHeart() {
+            ctx.save();
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            // 修复心跳曲线：限制缩放范围，确保爱心不会缩放到消失
+            heartBeatPhase += beatSpeed;
+            if (heartBeatPhase > Math.PI * 2) heartBeatPhase = 0;
+            
+            // 简化缓动计算，确保scale始终大于0.8（避免爱心消失）
+            let beatCurve = Math.sin(heartBeatPhase);
+            beatCurve = beatCurve > 0 ? Math.pow(beatCurve, beatEaseFactor) : -Math.pow(-beatCurve, beatEaseFactor) * 0.5;
+            heartScale = Math.max(0.8, 1 + beatCurve * beatIntensity); // 限制最小缩放
+
+            const scale = Math.min(canvas.width, canvas.height) / 8 * heartScale;
+
+            // 绘制爱心路径
+            ctx.beginPath();
+            for (let t = 0; t < Math.PI * 2; t += 0.01) {
+                const x = 16 * Math.pow(Math.sin(t), 3);
+                const y = -(13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t));
+                const px = centerX + x * scale;
+                const py = centerY + y * scale;
+                t === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+
+            // 优化渐变：确保颜色不透明，过渡更细腻
+            const gradient = ctx.createLinearGradient(
+                centerX - scale * 12, centerY - scale * 12,
+                centerX + scale * 12, centerY + scale * 12
+            );
+            gradient.addColorStop(0, getCssVar('--heart-color-1'));
+            gradient.addColorStop(0.4, getCssVar('--heart-color-2'));
+            gradient.addColorStop(0.7, getCssVar('--heart-color-3'));
+            gradient.addColorStop(1, getCssVar('--heart-color-3')); // 修复最后一个色标，避免透明
+            
+            // 提高基础透明度，确保爱心清晰可见
+            ctx.fillStyle = gradient;
+            ctx.globalAlpha = 0.6 + (heartScale - 1) * 0.25; // 提高基础透明度
+            ctx.fill();
+
+            // 新增内发光效果
+            ctx.shadowColor = getCssVar('--heart-glow');
+            ctx.shadowBlur = 25 + (heartScale - 1) * 10;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+
+            // 优化描边：加粗描边，确保可见
+            ctx.strokeStyle = getCssVar('--heart-color-3');
+            ctx.lineWidth = 3.5 + (heartScale - 1) * 1.5; // 加粗基础描边
+            ctx.globalAlpha = 0.9 + (heartScale - 1) * 0.35; // 提高描边透明度
+            ctx.stroke();
+
+            // 文字同步心跳：文字大小和透明度随心跳变化
+            heartText.style.opacity = 0.9 + (heartScale - 1) * 0.5; // 提高文字基础透明度
+            heartText.style.transform = 'translate(-50%, -50%) scale(' + (1 + (heartScale - 1) * 0.1) + ')';
+
+            ctx.restore();
+        }
+
+        // 初始化粒子：适度增加粒子数量，保证视觉饱满但不卡顿
+        const heartPoints = createHeartPoints();
+        const particles = [];
+        const particleCount = Math.min(1200, Math.floor(canvas.width * canvas.height / 1000));
+
+        for (let i = 0; i < particleCount; i++) {
+            const randomPoint = heartPoints[Math.floor(Math.random() * heartPoints.length)];
+            particles.push(new Particle(randomPoint.x, randomPoint.y));
+        }
+
+        // 新增：点击时生成粒子爆发效果
+        function createClickBurst(x, y) {
+            const burst = document.createElement('div');
+            burst.className = 'particle-burst';
+            burst.style.left = x + 'px';
+            burst.style.top = y + 'px';
+            burst.style.width = '200px';
+            burst.style.height = '200px';
+            burst.style.marginLeft = '-100px';
+            burst.style.marginTop = '-100px';
+            document.querySelector('.canvas-container').appendChild(burst);
+            
+            // 触发动画
+            setTimeout(() => {
+                burst.style.opacity = 0.8;
+                burst.style.transform = 'scale(1.5)';
+            }, 10);
+            
+            // 移除元素
+            setTimeout(() => {
+                burst.remove();
+            }, 600);
+        }
+
+        // 动画主循环：优化背景拖影，更柔和的过渡
+        function animate() {
+            // 优化拖影：降低不透明度，拖影更柔和，视觉更丝滑
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawHeart();
+            particles.forEach(particle => {
+                particle.update();
+                particle.draw();
+            });
+
+            requestAnimationFrame(animate);
+        }
+
+        // 鼠标事件优化
+        canvas.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+        });
+        canvas.addEventListener('mouseleave', () => {
+            mouseX = null;
+            mouseY = null;
+        });
+        // 点击触发强化心跳+粒子爆发
+        canvas.addEventListener('click', (e) => {
+            const now = Date.now();
+            if (now - lastClickTime < 300) return; // 防抖
+            lastClickTime = now;
+            
+            heartBeatPhase = Math.PI / 2; 
+            heartScale = Math.min(1.3, 1 + beatIntensity * 1.8); // 限制点击最大缩放
+            createClickBurst(e.clientX, e.clientY); // 生成点击爆发效果
+        });
+
+        // 页面加载优化：更自然的淡入
+        window.addEventListener('load', () => {
+            document.body.style.opacity = 0;
+            let opacity = 0;
+            const fadeIn = () => {
+                opacity += 0.015;
+                document.body.style.opacity = opacity;
+                if (opacity < 1) requestAnimationFrame(fadeIn);
+            };
+            fadeIn();
+            animate();
+        });
+    </script>
 </body>
 </html>
